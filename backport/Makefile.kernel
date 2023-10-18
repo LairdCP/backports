@@ -1,0 +1,111 @@
+include $(BACKPORT_DIR)/versions
+export BACKPORTS_VERSION BACKPORTED_KERNEL_VERSION BACKPORTED_KERNEL_VERSION_CODE BACKPORTED_KERNEL_NAME
+ifdef BACKPORTS_GIT_TRACKED
+export BACKPORTS_GIT_TRACKER_DEF=-DBACKPORTS_GIT_TRACKED=\"$(BACKPORTS_GIT_TRACKED)\"
+else
+export BACKPORTS_GIT_TRACKER_DEF=
+endif
+
+ifeq ($(CONFIG_BACKPORT_INTEGRATE),)
+# Since 2.6.21, try-run is available, but cc-disable-warning
+# was only added later, so we add it here ourselves:
+backport-cc-disable-warning = $(call try-run,\
+	$(CC) $(KBUILD_CPPFLAGS) $(KBUILD_CFLAGS) -W$(strip $(1)) -c -x c /dev/null -o "$$TMP",-Wno-$(strip $(1)))
+
+NOSTDINC_FLAGS += \
+	-I$(M)/backport-include/ \
+	-I$(M)/backport-include/uapi \
+	-I$(M)/include/ \
+	-I$(M)/include/uapi \
+	-include $(M)/backport-include/backport/backport.h \
+	$(call backport-cc-disable-warning, unused-but-set-variable) \
+	-DCPTCFG_VERSION=\"$(BACKPORTS_VERSION)\" \
+	-DCPTCFG_KERNEL_VERSION=\"$(BACKPORTED_KERNEL_VERSION)\" \
+	-DCPTCFG_KERNEL_VERSION_CODE=$(BACKPORTED_KERNEL_VERSION_CODE) \
+	-DCPTCFG_KERNEL_NAME=\"$(BACKPORTED_KERNEL_NAME)\" \
+	-DCPTCFG_VERSION_KERNEL=$(VERSION) \
+	-DCPTCFG_VERSION_PATCHLEVEL=$(PATCHLEVEL) \
+	-DCPTCFG_VERSION_SUBLEVEL=$(SUBLEVEL) \
+	$(BACKPORTS_GIT_TRACKER_DEF) \
+	$(CFLAGS)
+
+export backport_srctree = $(M)
+else
+export BACKPORT_DIR = backports/
+export backport_srctree = $(BACKPORT_DIR)
+NOSTDINC_FLAGS += \
+	-I$(BACKPORT_DIR)/backport-include/ \
+	-I$(BACKPORT_DIR)/backport-include/uapi \
+	-I$(BACKPORT_DIR)/include/ \
+	-I$(BACKPORT_DIR)/include/uapi \
+	-include $(BACKPORT_DIR)/backport-include/backport/backport.h \
+	-DCPTCFG_VERSION_KERNEL=$(VERSION) \
+	-DCPTCFG_VERSION_PATCHLEVEL=$(PATCHLEVEL) \
+	-DCPTCFG_VERSION_SUBLEVEL=$(SUBLEVEL) \
+	$(CFLAGS)
+endif
+
+ifeq ($(findstring no-pie,$(KBUILD_CFLAGS)), )
+CC_PIE := $(call cc-option, -fno-pie) $(call cc-option, -no-pie)
+KBUILD_CFLAGS += $(CC_PIE)
+endif
+
+CC_FLAGS_EXTRA = $(call cc-option, -Wno-format-truncation) \
+	$(call cc-option, -Wno-address-of-packed-member) \
+	$(call cc-option, -Wno-packed-not-aligned)
+
+ifeq ($(findstring stack-protector,$(KBUILD_CFLAGS)), )
+CC_FLAGS_EXTRA +=  $(call cc-option, -fno-stack-protector)
+endif
+
+ifeq ($(CPTCFG_KERNEL_4_4),y)
+CC_FLAGS_EXTRA += -Wno-pointer-sign
+
+ifeq ($(CPTCFG_KERNEL_3_7),)
+CC_FLAGS_EXTRA += $(call cc-option, -mfentry -DCC_USING_FENTRY)
+endif
+endif
+
+CC_FLAGS_EXTRA += $(call backport-cc-disable-warning, unused-const-variable)
+CC_FLAGS_EXTRA += $(call backport-cc-disable-warning, unused-function)
+CC_FLAGS_EXTRA += $(call backport-cc-disable-warning, array-bounds)
+CC_FLAGS_EXTRA += $(call backport-cc-disable-warning, stringop-truncation)
+
+ifneq ($(filter $(VERSION),2 3 4),)
+# See https://github.com/scylladb/dpdk/issues/5
+# Issue persists through kernel 4.8
+CC_FLAGS_EXTRA += $(call cc-ifversion, -lt, 0999, $(call backport-cc-disable-warning, attributes))
+endif
+
+ifeq ($(VERSION),4)
+ifneq ($(filter $(PATCHLEVEL),4 9),)
+CC_FLAGS_EXTRA += $(call cc-option, -Wno-error=incompatible-pointer-types)
+endif
+endif
+
+ifdef CONFIG_RETPOLINE
+CC_FLAGS_EXTRA += $(call cc-option, -fcf-protection=none)
+endif
+
+CC_FLAGS_EXTRA := $(CC_FLAGS_EXTRA)
+subdir-ccflags-y += $(CC_FLAGS_EXTRA)
+
+obj-y += compat/
+
+obj-$(CPTCFG_CFG80211) += net/wireless/
+obj-$(CPTCFG_MAC80211) += net/mac80211/
+obj-$(CPTCFG_QRTR) += net/qrtr/
+obj-$(CPTCFG_QCOM_QMI_HELPERS) += drivers/soc/qcom/
+obj-$(CPTCFG_MHI_BUS) += drivers/bus/mhi/
+obj-$(CPTCFG_WLAN) += drivers/net/wireless/
+obj-$(CPTCFG_BT) += net/bluetooth/
+obj-$(CPTCFG_BT) += drivers/bluetooth/
+obj-y += drivers/bluetooth/android/
+obj-$(CPTCFG_SSB) += drivers/ssb/
+obj-$(CPTCFG_BCMA) += drivers/bcma/
+obj-$(CPTCFG_USB_NET_RNDIS_WLAN) += drivers/net/usb/
+
+obj-$(CPTCFG_USB_WDM) += drivers/usb/class/
+obj-$(CPTCFG_USB_USBNET) += drivers/net/usb/
+
+obj-$(CPTCFG_STAGING) += drivers/staging/
